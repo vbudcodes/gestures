@@ -13,14 +13,16 @@ hands = mp_hands.Hands(
 mp_draw = mp.solutions.drawing_utils
 
 
+def is_thumb_open(hand_landmarks):
+    return hand_landmarks.landmark[4].x > hand_landmarks.landmark[3].x
+
+
 def count_fingers(hand_landmarks):
     count = 0
 
-    # Thumb (moves sideways)
-    if hand_landmarks.landmark[4].x > hand_landmarks.landmark[3].x:
+    if is_thumb_open(hand_landmarks):
         count += 1
 
-    # Other fingers (move vertically)
     fingers = [
         (8, 6),    # Index
         (12, 10),  # Middle
@@ -35,6 +37,22 @@ def count_fingers(hand_landmarks):
     return count
 
 
+def detect_gesture(hand_landmarks):
+    finger_count = count_fingers(hand_landmarks)
+    thumb_open = is_thumb_open(hand_landmarks)
+
+    if finger_count == 0:
+        return "FIST"
+
+    if finger_count == 5:
+        return "PALM"
+
+    if thumb_open and finger_count == 1:
+        return "THUMBS UP"
+
+    return "UNKNOWN"
+
+
 # Start webcam
 cap = cv2.VideoCapture(0)
 
@@ -43,30 +61,24 @@ while True:
     if not ret:
         break
 
-    # Convert BGR to RGB
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    # Process frame with MediaPipe
     result = hands.process(rgb)
 
     if result.multi_hand_landmarks:
         for hand_landmarks in result.multi_hand_landmarks:
 
-            # Draw landmarks
             mp_draw.draw_landmarks(
                 frame,
                 hand_landmarks,
                 mp_hands.HAND_CONNECTIONS
             )
 
-            # Count fingers
-            finger_count = count_fingers(hand_landmarks)
+            gesture = detect_gesture(hand_landmarks)
 
-            # Display result
             cv2.putText(
                 frame,
-                f"Fingers: {finger_count}",
-                (50, 50),
+                f"Gesture: {gesture}",
+                (50, 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 1,
                 (0, 255, 0),
