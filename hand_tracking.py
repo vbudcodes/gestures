@@ -115,3 +115,22 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()
+def process_frame(frame):
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    result = hands.process(rgb)
+
+    gesture = "NONE"
+
+    if result.multi_hand_landmarks:
+        for hand_landmarks in result.multi_hand_landmarks:
+            mp_draw.draw_landmarks(
+                frame,
+                hand_landmarks,
+                mp_hands.HAND_CONNECTIONS
+            )
+
+            raw_gesture = detect_gesture(hand_landmarks)
+            gesture_history.append(raw_gesture)
+            gesture = max(set(gesture_history), key=gesture_history.count)
+
+    return frame, gesture
