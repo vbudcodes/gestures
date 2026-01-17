@@ -1,30 +1,86 @@
 import time
+import subprocess
+from collections import deque
+from gesture_events import gesture_queue
 
-class ActionController:
-    def __init__(self):
-        self.last_action_time = 0
-        self.delay = 0.5  # debounce delay in seconds
+DEBOUNCE_TIME = 0.8
+STABILITY_FRAMES = 4  
 
-    def can_perform_action(self):
-        current_time = time.time()
-        if current_time - self.last_action_time > self.delay:
-            self.last_action_time = current_time
-            return True
-        return False
+gesture_buffer = deque(maxlen=STABILITY_FRAMES)
+_last_action_time = 0
+_last_confirmed_gesture = None
 
-    def perform_action(self, gesture_name):
-        """
-        This method will later map gestures to system actions.
-        Currently acts as a placeholder.
-        """
-        if not self.can_perform_action():
-            return
+# Volume Helpers 
 
-        if gesture_name == "VOLUME_UP":
-            print("Volume Up Gesture Detected")
+def get_volume():
+    result = subprocess.run(
+        ["osascript", "-e", "output volume of (get volume settings)"],
+        capture_output=True,
+        text=True
+    )
+    return int(result.stdout.strip())
 
-        elif gesture_name == "VOLUME_DOWN":
-            print("Volume Down Gesture Detected")
+def set_volume(value):
+    value = max(0, min(100, value))
+    subprocess.run(
+        ["osascript", "-e", f"set volume output volume {value}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
 
-        elif gesture_name == "MUTE":
-            print("Mute Gesture Detected")
+def mute_volume():
+    subprocess.run(
+        ["osascript", "-e", "set volume with output muted"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
+def unmute_volume():
+    subprocess.run(
+        ["osascript", "-e", "set volume without output muted"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
+#  Gesture → Action
+
+def perform_action(gesture):
+    current = get_volume()
+
+    if gesture == "THUMBS_UP":
+        set_volume(current + 10)
+
+    elif gesture == "FIST":
+        set_volume(current - 10)
+
+    elif gesture == "PALM":
+        mute_volume()
+
+#worker
+
+def action_worker():
+    global _last_action_time, _last_confirmed_gesture
+
+    while True:
+        gesture = gesture_queue.get()
+        gesture_buffer.append(gesture)
+
+        # Require stable gesture
+        if len(gesture_buffer) < STABILITY_FRAMES:
+            continue
+
+        if not all(g == gesture for g in gesture_buffer):
+            continue
+
+        now = time.time()
+
+        if gesture == _last_confirmed_gesture:
+            continue
+
+        if now - _last_action_time < DEBOUNCE_TIME:
+            continue
+
+        perform_action(gesture)
+
+        _last_action_time = now
+        _last_confirmed_gesture = gesture
