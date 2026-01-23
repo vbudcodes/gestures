@@ -1,4 +1,4 @@
 from queue import Queue
 
-# Small size prevents backlog
-gesture_queue = Queue(maxsize=5)
+# Small queue to avoid backlog
+gesture_event_queue = Queue(maxsize=5)

@@ -1,124 +1,105 @@
 import cv2
 import mediapipe as mp
 import time
-import math
-
-# -------------------- MediaPipe Setup (INIT ONCE) --------------------
 
 mp_hands = mp.solutions.hands
-mp_draw = mp.solutions.drawing_utils
+mp_drawing = mp.solutions.drawing_utils
 
-hands = mp_hands.Hands(
-    static_image_mode=False,
-    max_num_hands=1,
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.7
-)
+class HandTracker:
+    def __init__(self):
+        self.hands = mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            min_detection_confidence=0.6,
+            min_tracking_confidence=0.6
+        )
+        self.prev_time = time.time()
 
-# -------------------- Landmark Index Constants --------------------
+    def _finger_count(self, landmarks, handedness):
+        """
+        Count fingers based on landmark positions.
+        Works reliably for open/closed fingers.
+        """
+        tips = [4, 8, 12, 16, 20]
+        pip = [2, 6, 10, 14, 18]
 
-TIP_IDS = [4, 8, 12, 16, 20]
-PIP_IDS = [2, 6, 10, 14, 18]
+        count = 0
 
-# -------------------- FPS Tracking --------------------
+        # Thumb (different logic for left/right)
+        if handedness == "Right":
+            if landmarks[tips[0]].x < landmarks[pip[0]].x:
+                count += 1
+        else:
+            if landmarks[tips[0]].x > landmarks[pip[0]].x:
+                count += 1
 
-_prev_time = 0
+        # Other 4 fingers
+        for i in range(1, 5):
+            if landmarks[tips[i]].y < landmarks[pip[i]].y:
+                count += 1
 
-# -------------------- Helper Functions --------------------
+        return count
 
-def _distance(p1, p2):
-    return math.hypot(p1.x - p2.x, p1.y - p2.y)
+    def _count_to_gesture(self, count):
+        return {
+            0: "FIST",
+            1: "ONE",
+            2: "TWO",
+            3: "THREE",
+            5: "PALM"
+        }.get(count, None)
 
-def _is_thumb_up(lm):
-    thumb_tip = lm[4]
-    thumb_ip = lm[3]
-    thumb_mcp = lm[2]
-    wrist = lm[0]
+    def process_frame(self, frame):
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.hands.process(frame_rgb)
 
-    # Thumb pointing upward (y decreases upward)
-    vertical = thumb_tip.y < thumb_ip.y < thumb_mcp.y
+        left_gesture = None
+        right_gesture = None
 
-    # Thumb extended away from palm
-    thumb_length = abs(thumb_tip.y - thumb_mcp.y)
-    palm_size = abs(wrist.y - lm[9].y)
+        if results.multi_hand_landmarks and results.multi_handedness:
+            for landmarks, handedness_info in zip(
+                results.multi_hand_landmarks,
+                results.multi_handedness
+            ):
+                handedness = handedness_info.classification[0].label
+                count = self._finger_count(landmarks.landmark, handedness)
+                gesture = self._count_to_gesture(count)
 
-    extended = thumb_length > palm_size * 0.4
+                if handedness == "Left":
+                    left_gesture = gesture
+                else:
+                    right_gesture = gesture
 
-    return vertical and extended
+                mp_drawing.draw_landmarks(
+                    frame,
+                    landmarks,
+                    mp_hands.HAND_CONNECTIONS
+                )
 
+                cv2.putText(
+                    frame,
+                    f"{handedness}: {gesture}",
+                    (int(landmarks.landmark[0].x * frame.shape[1]),
+                     int(landmarks.landmark[0].y * frame.shape[0]) - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 0),
+                    2
+                )
 
-def _other_fingers_folded(lm):
-    folded = 0
-    tips = [8, 12, 16, 20]
-    pips = [6, 10, 14, 18]
+        # FPS
+        current_time = time.time()
+        fps = 1 / (current_time - self.prev_time)
+        self.prev_time = current_time
 
-    for tip, pip in zip(tips, pips):
-        if lm[tip].y > lm[pip].y:
-            folded += 1
-
-    return folded >= 3  # allow 1 noisy finger
-
-
-def _detect_gesture(lm):
-    # THUMBS UP (highest priority)
-    if _is_thumb_up(lm) and _other_fingers_folded(lm):
-        return "THUMBS_UP"
-
-    # FIST
-    folded = 0
-    for tip, pip in zip([8,12,16,20], [6,10,14,18]):
-        if lm[tip].y > lm[pip].y:
-            folded += 1
-
-    if folded == 4:
-        return "FIST"
-
-    # PALM
-    extended = 0
-    for tip, pip in zip([8,12,16,20], [6,10,14,18]):
-        if lm[tip].y < lm[pip].y:
-            extended += 1
-
-    if extended == 4:
-        return "PALM"
-
-    return "UNKNOWN"
-
-
-
-# Main Processing Function 
-
-def process_frame(frame):
-    global _prev_time
-
-    frame = cv2.flip(frame, 1)
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    results = hands.process(rgb)
-
-    gesture = "NONE"
-
-    if results.multi_hand_landmarks:
-        hand_landmarks = results.multi_hand_landmarks[0]
-        mp_draw.draw_landmarks(
+        cv2.putText(
             frame,
-            hand_landmarks,
-            mp_hands.HAND_CONNECTIONS
+            f"FPS: {int(fps)}",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2
         )
 
-        lm = hand_landmarks.landmark
-        #fingers = _count_fingers(lm)
-        gesture = _detect_gesture( lm)
-
-    #  FPS Overlay 
-    curr_time = time.time()
-    fps = int(1 / (curr_time - _prev_time)) if _prev_time != 0 else 0
-    _prev_time = curr_time
-
-    cv2.putText(frame, f"Gesture: {gesture}", (10, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-    cv2.putText(frame, f"FPS: {fps}", (10, 80),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-    return frame, gesture
+        return frame, left_gesture, right_gesture

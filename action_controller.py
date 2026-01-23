@@ -1,86 +1,52 @@
 import time
 import subprocess
-from collections import deque
-from gesture_events import gesture_queue
+from gesture_events import gesture_event_queue
+import shared_state
 
-DEBOUNCE_TIME = 0.8
-STABILITY_FRAMES = 4  
+STABILITY_TIME = 0.3
+DEBOUNCE_TIME = 0.6
 
-gesture_buffer = deque(maxlen=STABILITY_FRAMES)
-_last_action_time = 0
-_last_confirmed_gesture = None
+last_action = None
+last_action_time = 0
+stable_since = None
+current_volume = 50
 
-# Volume Helpers 
+def set_volume(vol):
+    vol = max(0, min(100, vol))
+    script = f"set volume output volume {vol}"
+    subprocess.call(["osascript", "-e", script])
+    return vol
 
-def get_volume():
-    result = subprocess.run(
-        ["osascript", "-e", "output volume of (get volume settings)"],
-        capture_output=True,
-        text=True
-    )
-    return int(result.stdout.strip())
+def toggle_mute():
+    script = 'set volume output muted not (output muted of (get volume settings))'
+    subprocess.call(["osascript", "-e", script])
 
-def set_volume(value):
-    value = max(0, min(100, value))
-    subprocess.run(
-        ["osascript", "-e", f"set volume output volume {value}"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-
-def mute_volume():
-    subprocess.run(
-        ["osascript", "-e", "set volume with output muted"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-
-def unmute_volume():
-    subprocess.run(
-        ["osascript", "-e", "set volume without output muted"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-
-#  Gesture → Action
-
-def perform_action(gesture):
-    current = get_volume()
-
-    if gesture == "THUMBS_UP":
-        set_volume(current + 10)
-
-    elif gesture == "FIST":
-        set_volume(current - 10)
-
-    elif gesture == "PALM":
-        mute_volume()
-
-#worker
-
-def action_worker():
-    global _last_action_time, _last_confirmed_gesture
+def run():
+    global last_action, last_action_time, stable_since, current_volume
 
     while True:
-        gesture = gesture_queue.get()
-        gesture_buffer.append(gesture)
-
-        # Require stable gesture
-        if len(gesture_buffer) < STABILITY_FRAMES:
-            continue
-
-        if not all(g == gesture for g in gesture_buffer):
-            continue
-
+        event = gesture_event_queue.get()
+        action = event["action"]
         now = time.time()
 
-        if gesture == _last_confirmed_gesture:
+        if action != last_action:
+            last_action = action
+            stable_since = now
             continue
 
-        if now - _last_action_time < DEBOUNCE_TIME:
+        if now - stable_since < STABILITY_TIME:
             continue
 
-        perform_action(gesture)
+        if now - last_action_time < DEBOUNCE_TIME:
+            continue
 
-        _last_action_time = now
-        _last_confirmed_gesture = gesture
+        if action == "UP":
+            current_volume = set_volume(current_volume + 5)
+        elif action == "DOWN":
+            current_volume = set_volume(current_volume - 5)
+        elif action == "MUTE":
+            toggle_mute()
+
+        shared_state.current_volume = current_volume
+        shared_state.volume_changed_at = now
+        last_action_time = now
